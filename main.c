@@ -7,6 +7,7 @@
 // The total number of people passed/people in a room is displayed on a seven segment display.
 
 #include "msp430g2553.h"
+#include "math.h"
 
 // Define bit masks for ADC pin and channel used as P1.4
 #define ADC_INPUT_BIT_MASK 0x10		// Assign input pin to P1.4
@@ -17,14 +18,15 @@
  // Function prototypes
 void init_adc(void);
 void init_wdt(void);
-void init_timer(void);
 
 // =======ADC Initialization and Interrupt Handler========
 
 // Global variables that store the results (read from the debugger)
 volatile int latest_result;   // most recent result is stored in latest_result
-
-
+volatile int count = 0;
+volatile int ambient;
+int first_time = 1;
+int lower = 0;
 
 
 // Initialization of the ADC
@@ -54,7 +56,7 @@ void init_wdt(){
 			 WDTTMSEL +     // (bit 4) select interval timer mode
 			 WDTCNTCL  		// (bit 3) clear watchdog timer counter
 							// bit 2=0 => SMCLK is the source
-							// bits 1-0 = 00 => source/32K
+					+ 1		// bits 1-0 = 00 => source/8K
 			 );
 	 IE1 |= WDTIE;			// enable the WDT interrupt (in the system interrupt register IE1)
 }
@@ -68,7 +70,8 @@ void main(){
 
   	init_adc();
   	init_wdt();
-  	init_timer();
+
+  	ADC10CTL0 |= ADC10SC;			// Trigger one conversion
 
 	_bis_SR_register(GIE+LPM0_bits);
 }
@@ -78,14 +81,46 @@ void main(){
 
 // ADC10 Interrupt Handler
 void interrupt adc_handler(){ // Invoked when a conversion is complete
+	latest_result = ADC10MEM;			// store the answer in memory
 
-	latest_result = ADC10MEM;   // store the answer in memory
+	if (first_time){
+		ambient  = latest_result;
+		first_time = 0;
+	}
+
 }
 ISR_VECTOR(adc_handler, ".int05")
 
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
+	/*
+	if (interval-- == 0){
+		ADC10CTL0 |= ADC10SC;
+		previous_result = latest_result;
+	}
+	else{
+		previous_result = latest_result;
+	}
+	if (abs(previous_result - latest_result) > 10){
+		count++;
+		interval = 200;
+	}
+	*/
 
-	ADC10CTL0 |= ADC10SC;			// trigger a conversion
+	if (ambient - latest_result > 10){ // Detect downward edge
+		lower = 1;
+	}
+	else if (lower == 0){
+		ambient = (ambient+latest_result)/2;		// Average ambient light
+	}
+	else if (lower == 1){
+		if (abs(ambient - latest_result) < 10){
+			count++;
+			lower = 0;
+		}
+	}
+
+
+	ADC10CTL0 |= ADC10SC; // trigger a conversion
 }
 ISR_VECTOR(WDT_interval_handler, ".int10")
