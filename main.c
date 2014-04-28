@@ -8,6 +8,7 @@
 
 #include "msp430g2553.h"
 #include "math.h"
+#include "lcd16.h"
 
 // Define bit masks for ADC pin and channel used as P1.4
 #define ADC_INPUT_BIT_MASK 0x10		// Assign input pin to P1.4
@@ -68,10 +69,16 @@ void main(){
 	BCSCTL1 = CALBC1_8MHZ;			// 8Mhz calibration for clock
   	DCOCTL  = CALDCO_8MHZ;
 
+	P1DIR = 0xEF;
+	P1OUT = 0x00;
+
   	init_adc();
   	init_wdt();
+	lcdinit();
 
   	ADC10CTL0 |= ADC10SC;			// Trigger one conversion
+
+  	prints("Count:");
 
 	_bis_SR_register(GIE+LPM0_bits);
 }
@@ -88,24 +95,14 @@ void interrupt adc_handler(){ // Invoked when a conversion is complete
 		first_time = 0;
 	}
 
+	gotoXy(0,1);
+	integerToLcd(count);
+
 }
 ISR_VECTOR(adc_handler, ".int05")
 
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
-	/*
-	if (interval-- == 0){
-		ADC10CTL0 |= ADC10SC;
-		previous_result = latest_result;
-	}
-	else{
-		previous_result = latest_result;
-	}
-	if (abs(previous_result - latest_result) > 10){
-		count++;
-		interval = 200;
-	}
-	*/
 
 	if (ambient - latest_result > 10){ // Detect downward edge
 		lower = 1;
@@ -118,7 +115,11 @@ interrupt void WDT_interval_handler(){
 			count++;
 			lower = 0;
 		}
+		else
+			lower = 0;
 	}
+
+
 
 
 	ADC10CTL0 |= ADC10SC; // trigger a conversion
