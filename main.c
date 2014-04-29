@@ -11,11 +11,10 @@
 #include "lcd16.h"
 
 // Define bit masks for ADC pin and channel used as P1.4
-#define ADC_INPUT_BIT_MASK 0x10		// Assign input pin to P1.4
-#define ADC_INCH INCH_4				// Input channel
-#define TA0_BIT 0x02				// Assign output pin to P1.1
-
-
+#define RIGHT_SENSOR_MASK 0x20				// Assign input pin to P1.5
+#define LEFT_SENSOR_MASK 0x10				// Assign input pin to P1.4
+#define RIGHT_SENSOR INCH_5				// Assign input pin to P1.5
+#define LEFT_SENSOR INCH_4				// Assign input pin to P1.4
  // Function prototypes
 void init_adc(void);
 void init_wdt(void);
@@ -23,14 +22,22 @@ void init_wdt(void);
 // =======ADC Initialization and Interrupt Handler========
 
 // Global variables that store the results (read from the debugger)
-volatile int latest_result;   // most recent result is stored in latest_result
+// Left = Enter
+// Right = Exit
+volatile int latest_result_left;   // most recent result is stored in latest_result
+volatile int latest_result_right;
 volatile int count = 0;
-volatile int ambient;
-int first_time = 1;
-int lower = 0;
-
+volatile int ambient_left = 0;
+volatile int ambient_right = 0;
+int first_time_left = 1;
+int first_time_right = 1;
+int lower_left = 0;
+int lower_right = 0;
+int trigger_left = 0;
+int trigger_right = 0;
 
 // Initialization of the ADC
+/*
 void init_adc(){
 	ADC10CTL1= ADC_INCH				// input channel 4
 			  +SHS_0				// use ADC10SC bit to trigger sampling
@@ -46,7 +53,59 @@ void init_adc(){
 			  +ADC10IE				// enable interrupts
 			  ;
 }
+*/
 
+void init_adc() {
+	ADC10CTL0 = ADC10ON			// turn on ADC
+				+ADC10SHT_1		// spend 8 clock cycles to take a sample
+				+SREF_0			// V_r+ = Vcc, V_r- = ground
+				+ADC10IE		// enable ADC interrupt
+				;
+	ADC10CTL1 = ADC10SSEL_0;	// +clock select, invert sample input
+}
+
+void get_left_sensor() {
+	ADC10CTL1 &= ~RIGHT_SENSOR;		// select input channel
+	ADC10CTL1 |= LEFT_SENSOR;
+	ADC10AE0 = LEFT_SENSOR_MASK;	// enable analog input of left speaker
+	ADC10CTL0 |= ENC + ADC10SC;		// enable conversion, start sample-and-conversion
+
+	while(1){
+		if (((ADC10CTL0 & ADC10IFG)==ADC10IFG)) {
+			ADC10CTL0 &= ~(ADC10IFG +ENC);
+			break;
+		}
+	}
+	latest_result_left = ADC10MEM;
+	ADC10CTL0 &= ~ENC;
+
+	if (first_time_left){
+		ambient_left  = latest_result_left;
+		first_time_left = 0;
+	}
+}
+
+
+void get_right_sensor() {
+	ADC10CTL1 &= ~LEFT_SENSOR;		// select input channel
+	ADC10CTL1 |= RIGHT_SENSOR;
+	ADC10AE0 = RIGHT_SENSOR_MASK;
+	ADC10CTL0 |= ENC + ADC10SC;		// enable conversion, start sample-and-conversion
+
+	while(1){
+		if (((ADC10CTL0 & ADC10IFG)==ADC10IFG)) {
+			ADC10CTL0 &= ~(ADC10IFG +ENC);
+			break;
+		}
+	}
+	latest_result_right = ADC10MEM;
+	ADC10CTL0 &= ~ENC;
+
+	if (first_time_right){
+		ambient_right  = latest_result_right;
+		first_time_right = 0;
+	}
+}
 
 void init_wdt(){
 	// setup the watchdog timer as an interval timer
@@ -69,59 +128,83 @@ void main(){
 	BCSCTL1 = CALBC1_8MHZ;			// 8Mhz calibration for clock
   	DCOCTL  = CALDCO_8MHZ;
 
-	P1DIR = 0xEF;
+	P1DIR = 0xCF;
 	P1OUT = 0x00;
 
   	init_adc();
   	init_wdt();
 	lcdinit();
 
-  	ADC10CTL0 |= ADC10SC;			// Trigger one conversion
+	ADC10CTL0 |= ENC + ADC10SC;
+  	//ADC10CTL0 |= ADC10SC;			// Trigger one conversion
 
   	prints("Count:");
 
 	_bis_SR_register(GIE+LPM0_bits);
 }
 
-
 // *****Interrupt Handlers*****
 
 // ADC10 Interrupt Handler
 void interrupt adc_handler(){ // Invoked when a conversion is complete
-	latest_result = ADC10MEM;			// store the answer in memory
-
-	if (first_time){
-		ambient  = latest_result;
-		first_time = 0;
-	}
-
-	gotoXy(0,1);
-	integerToLcd(count);
-
+	ADC10CTL0 &= ~ADC10IFG;  // clear interrupt flag
 }
 ISR_VECTOR(adc_handler, ".int05")
 
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
 
-	if (ambient - latest_result > 10){ // Detect downward edge
-		lower = 1;
+	get_right_sensor();
+	get_left_sensor();
+	//Left----------------------------------------------------------------------------------------------------------
+	if (ambient_left - latest_result_left > 10){ // Detect downward edge
+		lower_left = 1;
 	}
-	else if (lower == 0){
-		ambient = (ambient+latest_result)/2;		// Average ambient light
+	else if (lower_left == 0){
+		ambient_left = (ambient_left + latest_result_left)/2;		// Average ambient light
 	}
-	else if (lower == 1){
-		if (abs(ambient - latest_result) < 10){
-			count++;
-			lower = 0;
+	else if (lower_left == 1){
+		if (abs(ambient_left - latest_result_left) < 10){
+			trigger_left = 1;
+			lower_left = 0;
 		}
 		else
-			lower = 0;
+			lower_left = 0;
 	}
+	//Right----------------------------------------------------------------------------------------------------------
+	if (ambient_right - latest_result_right > 10){ // Detect downward edge
+		lower_right = 1;
+	}
+	else if (lower_right == 0){
+		ambient_right = (ambient_right + latest_result_right)/2;		// Average ambient light
+	}
+	else if (lower_right == 1){
+		if (abs(ambient_right - latest_result_right) < 10){
+			trigger_right = 1;
+			lower_right = 0;
+		}
+		else
+			lower_right = 0;
+	}
+	// Check to see which on triggered first
 
+		if (trigger_left && !(trigger_right)){
+			count++;
+			trigger_right = 0;
+			trigger_left = 0;
+		}
+		else if (!(trigger_left) && trigger_right){
+			count--;
+			trigger_right = 0;
+			trigger_left = 0;
 
-
-
-	ADC10CTL0 |= ADC10SC; // trigger a conversion
+		}
+		else {
+			// do nothing
+			trigger_right = 0;
+			trigger_left = 0;
+		}
+	gotoXy(0,1);
+	integerToLcd(count);
 }
 ISR_VECTOR(WDT_interval_handler, ".int10")
