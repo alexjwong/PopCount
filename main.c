@@ -27,14 +27,17 @@ void init_wdt(void);
 volatile int latest_result_left;   // most recent result is stored in latest_result
 volatile int latest_result_right;
 volatile int count = 0;
-volatile int ambient_left = 0;
-volatile int ambient_right = 0;
-int first_time_left = 1;
-int first_time_right = 1;
-int lower_left = 0;
-int lower_right = 0;
-int trigger_left = 0;
-int trigger_right = 0;
+volatile int ambient_left = 0;		// Ambient light level for left sensor
+volatile int ambient_right = 0;		// Ambient light level for right sensor
+int first_time_left = 1;			// BOOl to check if first time after start up
+int first_time_right = 1;			// BOOL to check if first time after start up
+int lower_left = 0;					// BOOL
+int lower_right = 0;				// BOOL
+int trigger_left = 0;				// BOOL
+int trigger_right = 0;				// BOOL
+int timeout = 0;					// BOOL timeout
+int timeout_period = 0;
+int state = 0;
 
 // Initialization of the ADC
 /*
@@ -153,58 +156,108 @@ ISR_VECTOR(adc_handler, ".int05")
 
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
+	// Action time out counter
+	if (timeout == 1){
+		gotoXy(10,0);
+		prints("Wait");
+		if (timeout_period >= 500){
+			timeout_period = 0;
+			timeout = 0;
+			trigger_left = 0;
+			trigger_right = 0;
+		}
+		else
+			timeout_period++;
+	}
+	else if (timeout == 0){
+		timeout_period = 0;
+		gotoXy(10,0);
+		prints("    ");
+	}
+
 
 	get_right_sensor();
 	get_left_sensor();
+
 	//Left----------------------------------------------------------------------------------------------------------
-	if (ambient_left - latest_result_left > 10){ // Detect downward edge
+	if (ambient_left - latest_result_left > 8){ // Detect downward edge
 		lower_left = 1;
 	}
 	else if (lower_left == 0){
 		ambient_left = (ambient_left + latest_result_left)/2;		// Average ambient light
 	}
 	else if (lower_left == 1){
-		if (abs(ambient_left - latest_result_left) < 10){
-			trigger_left = 1;
-			lower_left = 0;
+		if (abs(ambient_left - latest_result_left) < 8){
+			if (trigger_right == 1 && timeout == 1){
+				count--;
+				trigger_right = 0;
+				lower_left = 0;
+				timeout = 0;
+			}
+			else {
+				trigger_left = 1;
+				timeout = 1;
+				lower_left = 0;
+			}
 		}
-		else
-			lower_left = 0;
 	}
 	//Right----------------------------------------------------------------------------------------------------------
-	if (ambient_right - latest_result_right > 10){ // Detect downward edge
+	if (ambient_right - latest_result_right > 8){ // Detect downward edge
 		lower_right = 1;
 	}
 	else if (lower_right == 0){
 		ambient_right = (ambient_right + latest_result_right)/2;		// Average ambient light
 	}
 	else if (lower_right == 1){
-		if (abs(ambient_right - latest_result_right) < 10){
-			trigger_right = 1;
-			lower_right = 0;
+		if (abs(ambient_right - latest_result_right) < 8){
+			if (trigger_left == 1 && timeout == 1){
+				count++;
+				trigger_left = 0;
+				lower_right = 0;
+				timeout = 0;
+			}
+			else {
+				trigger_right = 1;
+				timeout = 1;
+				lower_right = 0;
+			}
 		}
-		else
-			lower_right = 0;
 	}
-	// Check to see which on triggered first
 
-		if (trigger_left && !(trigger_right)){
-			count++;
-			trigger_right = 0;
-			trigger_left = 0;
-		}
-		else if (!(trigger_left) && trigger_right){
-			count--;
-			trigger_right = 0;
-			trigger_left = 0;
+	// If LEFT triggers first, wait for RIGHT to confirm pass (and vice versa)
 
-		}
-		else {
-			// do nothing
-			trigger_right = 0;
-			trigger_left = 0;
-		}
-	gotoXy(0,1);
-	integerToLcd(count);
+
+	/*
+	if (trigger_left && !(trigger_right)){
+		count++;
+		trigger_right = 0;
+		trigger_left = 0;
+	}
+	else if (!(trigger_left) && trigger_right){
+		count--;
+		trigger_right = 0;
+		trigger_left = 0;
+
+	}
+	else {
+		// do nothing
+		trigger_right = 0;
+		trigger_left = 0;
+	}
+	*/
+
+	if (count < 0){
+		/*
+		gotoXy(0,1);
+		prints("-");
+		gotoXy(1,1);
+		integerToLcd(abs(count));
+		*/
+		count = 0;
+	}
+	else {
+		gotoXy(1,1);
+		integerToLcd(count);
+	}
 }
 ISR_VECTOR(WDT_interval_handler, ".int10")
