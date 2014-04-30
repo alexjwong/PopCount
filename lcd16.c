@@ -32,7 +32,7 @@ void lcdData(unsigned char l){
 	P1OUT  &=~EN;
 }
 
-void lcdinit(void){
+void lcd_init(void){
 	P1OUT &=~RS;
 	P1OUT  &=~EN;
 	P1OUT |= 0x3;

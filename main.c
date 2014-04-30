@@ -15,21 +15,19 @@
 #define LEFT_SENSOR_MASK 0x10				// Assign input pin to P1.4
 #define RIGHT_SENSOR INCH_5				// Assign input pin to P1.5
 #define LEFT_SENSOR INCH_4				// Assign input pin to P1.4
+#define BUTTON BIT5						// P2.5
+
  // Function prototypes
 void init_adc(void);
 void init_wdt(void);
 
-// =======ADC Initialization and Interrupt Handler========
-
 // Global variables that store the results (read from the debugger)
-// Left = Enter
-// Right = Exit
-volatile int latest_result_left;   // most recent result is stored in latest_result
+volatile int latest_result_left;	// most recent result is stored in latest_result
 volatile int latest_result_right;
-volatile int count = 0;
+volatile int count = 0;				// Holds overall person count
 volatile int ambient_left = 0;		// Ambient light level for left sensor
 volatile int ambient_right = 0;		// Ambient light level for right sensor
-int first_time_left = 1;			// BOOl to check if first time after start up
+int first_time_left = 1;			// BOOL to check if first time after start up
 int first_time_right = 1;			// BOOL to check if first time after start up
 int lower_left = 0;					// BOOL
 int lower_right = 0;				// BOOL
@@ -37,7 +35,8 @@ int trigger_left = 0;				// BOOL
 int trigger_right = 0;				// BOOL
 int timeout = 0;					// BOOL timeout
 int timeout_period = 0;
-int state = 0;
+int state = 0;						// Tracks which mode the program is in
+int test =0 ;
 
 // Initialization of the ADC
 /*
@@ -131,17 +130,26 @@ void main(){
 	BCSCTL1 = CALBC1_8MHZ;			// 8Mhz calibration for clock
   	DCOCTL  = CALDCO_8MHZ;
 
+  	// Initialize P1 for LCD and two input pins for ADC10
 	P1DIR = 0xCF;
 	P1OUT = 0x00;
 
+	// Initialize P2 GPIO for our one button
+	P2DIR &= ~BUTTON;				// Sets the button to input
+	P2REN &= ~BUTTON;				// Resistor enable for button
+	P2OUT |= BUTTON;				// pullup on input pin
+	P2IE |= BUTTON;					// enable interrupts on button pin
+	P2IES &= ~BUTTON;				// set to interrupt on down going edge
+	P2IFG &= ~BUTTON;				// clear interrupt flag
+
   	init_adc();
   	init_wdt();
-	lcdinit();
+	lcd_init();
 
-	ADC10CTL0 |= ENC + ADC10SC;
+	ADC10CTL0 |= ENC + ADC10SC;		// Trigger one conversion for initial ambient values
   	//ADC10CTL0 |= ADC10SC;			// Trigger one conversion
 
-  	prints("Count:");
+  	prints("Population:");
 
 	_bis_SR_register(GIE+LPM0_bits);
 }
@@ -154,11 +162,47 @@ void interrupt adc_handler(){ // Invoked when a conversion is complete
 }
 ISR_VECTOR(adc_handler, ".int05")
 
+
+interrupt void button_handler(){
+	test = 1;
+	switch(state){
+		case 0:{
+			state = 1;
+			gotoXy(0,0);
+			prints("Attendance:");
+		}
+		case 1:{
+			state = 0;
+			gotoXy(0,0);
+			prints("Population:");
+		}
+	}
+	P2IFG &= ~BUTTON;									// Clear interrupt flag
+}
+ISR_VECTOR(button_handler, ".int03")
+
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
+	if (P2IN == BUTTON){
+		while (1){
+			if (state == 0 && P2IN == 0){
+				state = 1;
+				gotoXy(0,0);
+				prints("Attendance:");
+				break;
+			}
+			else if (state == 1 & P2IN == 0){
+				state = 0;
+				gotoXy(0,0);
+				prints("Population:");
+				break;
+			}
+		}
+	}
+
 	// Action time out counter
 	if (timeout == 1){
-		gotoXy(10,0);
+		gotoXy(10,1);
 		prints("Wait");
 		if (timeout_period >= 500){
 			timeout_period = 0;
@@ -171,7 +215,7 @@ interrupt void WDT_interval_handler(){
 	}
 	else if (timeout == 0){
 		timeout_period = 0;
-		gotoXy(10,0);
+		gotoXy(10,1);
 		prints("    ");
 	}
 
@@ -180,7 +224,7 @@ interrupt void WDT_interval_handler(){
 	get_left_sensor();
 
 	//Left----------------------------------------------------------------------------------------------------------
-	if (ambient_left - latest_result_left > 8){ // Detect downward edge
+	if (ambient_left - latest_result_left > 8){	// Detect downward edge
 		lower_left = 1;
 	}
 	else if (lower_left == 0){
@@ -189,7 +233,9 @@ interrupt void WDT_interval_handler(){
 	else if (lower_left == 1){
 		if (abs(ambient_left - latest_result_left) < 8){
 			if (trigger_right == 1 && timeout == 1){
-				count--;
+				if(state == 0){
+					count--;
+				}
 				trigger_right = 0;
 				lower_left = 0;
 				timeout = 0;
@@ -202,7 +248,7 @@ interrupt void WDT_interval_handler(){
 		}
 	}
 	//Right----------------------------------------------------------------------------------------------------------
-	if (ambient_right - latest_result_right > 8){ // Detect downward edge
+	if (ambient_right - latest_result_right > 8){	// Detect downward edge
 		lower_right = 1;
 	}
 	else if (lower_right == 0){
@@ -224,28 +270,6 @@ interrupt void WDT_interval_handler(){
 		}
 	}
 
-	// If LEFT triggers first, wait for RIGHT to confirm pass (and vice versa)
-
-
-	/*
-	if (trigger_left && !(trigger_right)){
-		count++;
-		trigger_right = 0;
-		trigger_left = 0;
-	}
-	else if (!(trigger_left) && trigger_right){
-		count--;
-		trigger_right = 0;
-		trigger_left = 0;
-
-	}
-	else {
-		// do nothing
-		trigger_right = 0;
-		trigger_left = 0;
-	}
-	*/
-
 	if (count < 0){
 		/*
 		gotoXy(0,1);
@@ -261,3 +285,4 @@ interrupt void WDT_interval_handler(){
 	}
 }
 ISR_VECTOR(WDT_interval_handler, ".int10")
+
