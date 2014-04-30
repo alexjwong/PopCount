@@ -2,9 +2,9 @@
 // Kanav Dhir - U28185259
 // EC 450 Final Project - Doorway counter
 
-// This program uses a variety of sensors to detect how many people have moved through a doorway.
-// As such, the sensor array should be position in the inside of a doorway.
-// The total number of people passed/people in a room is displayed on a seven segment display.
+// This program currently uses photoresistors to detect how many people have moved through a doorway.
+// As such, the sensors should be position in the inside of a doorway, preferably with ample light.
+// The total number of people passed/people in a room is displayed on a LCD display.
 
 #include "msp430g2553.h"
 #include "math.h"
@@ -15,6 +15,7 @@
 #define LEFT_SENSOR_MASK 0x10				// Assign input pin to P1.4
 #define RIGHT_SENSOR INCH_5					// Assign input pin to P1.5
 #define LEFT_SENSOR INCH_4					// Assign input pin to P1.4
+#define SENSITIVITY 8
 #define BUTTON BIT4							// P2.4
 
  // Function prototypes
@@ -26,6 +27,7 @@ void init_gpio(void);
 volatile int latest_result_left;	// most recent result is stored in x_latest_result
 volatile int latest_result_right;
 volatile int count = 0;				// Holds overall person count
+volatile int attendance = 0;
 volatile int ambient_left = 0;		// Ambient light level for left sensor
 volatile int ambient_right = 0;		// Ambient light level for right sensor
 int first_time_left = 1;			// BOOL to check if first time after start up
@@ -210,14 +212,14 @@ interrupt void WDT_interval_handler(){
 	// - each sensor triggers a check in the other to verify a pass.
 
 	//Left----------------------------------------------------------------------------------------------------------
-	if (ambient_left - latest_result_left > 8){	// Detect downward edge
+	if (ambient_left - latest_result_left > SENSITIVITY){	// Detect downward edge
 		lower_left = 1;
 	}
 	else if (lower_left == 0){
 		ambient_left = (ambient_left + latest_result_left)/2;		// Average ambient light
 	}
 	else if (lower_left == 1){
-		if (abs(ambient_left - latest_result_left) < 8){
+		if (abs(ambient_left - latest_result_left) < SENSITIVITY){
 			if (trigger_right == 1 && timeout == 1){
 				if(state == 0){	// STATE - if in population mode, will decrement
 								//			  in attendance mode, will NOT decrement
@@ -235,16 +237,17 @@ interrupt void WDT_interval_handler(){
 		}
 	}
 	//Right----------------------------------------------------------------------------------------------------------
-	if (ambient_right - latest_result_right > 8){	// Detect downward edge
+	if (ambient_right - latest_result_right > SENSITIVITY){	// Detect downward edge
 		lower_right = 1;
 	}
 	else if (lower_right == 0){
 		ambient_right = (ambient_right + latest_result_right)/2;		// Average ambient light
 	}
 	else if (lower_right == 1){
-		if (abs(ambient_right - latest_result_right) < 8){
+		if (abs(ambient_right - latest_result_right) < SENSITIVITY){
 			if (trigger_left == 1 && timeout == 1){
 				count++;
+				attendance++;
 				trigger_left = 0;
 				lower_right = 0;
 				timeout = 0;
@@ -268,8 +271,15 @@ interrupt void WDT_interval_handler(){
 		count = 0;
 	}
 	else {
-		gotoXy(1,1);
-		integerToLcd(count);
+		if (state == 0){
+			gotoXy(1,1);
+			integerToLcd(count);
+		}
+		else if (state == 1){
+			gotoXy(1,1);
+			integerToLcd(attendance);
+		}
+
 	}
 }
 ISR_VECTOR(WDT_interval_handler, ".int10")
