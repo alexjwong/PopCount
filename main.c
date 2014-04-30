@@ -13,16 +13,17 @@
 // Define bit masks for ADC pin and channel used as P1.4
 #define RIGHT_SENSOR_MASK 0x20				// Assign input pin to P1.5
 #define LEFT_SENSOR_MASK 0x10				// Assign input pin to P1.4
-#define RIGHT_SENSOR INCH_5				// Assign input pin to P1.5
-#define LEFT_SENSOR INCH_4				// Assign input pin to P1.4
-#define BUTTON BIT5						// P2.5
+#define RIGHT_SENSOR INCH_5					// Assign input pin to P1.5
+#define LEFT_SENSOR INCH_4					// Assign input pin to P1.4
+#define BUTTON BIT4							// P2.4
 
  // Function prototypes
 void init_adc(void);
 void init_wdt(void);
+void init_gpio(void);
 
 // Global variables that store the results (read from the debugger)
-volatile int latest_result_left;	// most recent result is stored in latest_result
+volatile int latest_result_left;	// most recent result is stored in x_latest_result
 volatile int latest_result_right;
 volatile int count = 0;				// Holds overall person count
 volatile int ambient_left = 0;		// Ambient light level for left sensor
@@ -36,26 +37,6 @@ int trigger_right = 0;				// BOOL
 int timeout = 0;					// BOOL timeout
 int timeout_period = 0;
 int state = 0;						// Tracks which mode the program is in
-int test =0 ;
-
-// Initialization of the ADC
-/*
-void init_adc(){
-	ADC10CTL1= ADC_INCH				// input channel 4
-			  +SHS_0				// use ADC10SC bit to trigger sampling
-			  +ADC10DIV_4			// ADC10 clock/5
-			  +ADC10SSEL_0			// Clock Source=ADC10OSC
-			  +CONSEQ_0;			// single channel, single conversion
-			  ;
-	ADC10AE0=ADC_INPUT_BIT_MASK;	// enable A4 analog input
-	ADC10CTL0= SREF_0				// reference voltages are Vss and Vcc
-			  +ADC10SHT_3			// 64 ADC10 Clocks for sample and hold time (slowest)
-			  +ADC10ON				// turn on ADC10
-			  +ENC					// enable (but not yet start) conversions
-			  +ADC10IE				// enable interrupts
-			  ;
-}
-*/
 
 void init_adc() {
 	ADC10CTL0 = ADC10ON			// turn on ADC
@@ -87,7 +68,6 @@ void get_left_sensor() {
 	}
 }
 
-
 void get_right_sensor() {
 	ADC10CTL1 &= ~LEFT_SENSOR;		// select input channel
 	ADC10CTL1 |= RIGHT_SENSOR;
@@ -108,6 +88,14 @@ void get_right_sensor() {
 		first_time_right = 0;
 	}
 }
+void init_gpio(){	// Init for Button Interrupt method - *isn't working*
+	P2DIR &= ~BUTTON;		// Sets the button to input
+	P2OUT |= BUTTON;		// pullup on input pin
+	P2REN &= ~BUTTON;		// Resistor Enable
+	P2IE |= BUTTON;			// enable interrupts on button pin
+	P2IES |= BUTTON;		// set to interrupt on down going edge
+	P2IFG &= ~BUTTON;		// clear interrupt flag
+}
 
 void init_wdt(){
 	// setup the watchdog timer as an interval timer
@@ -123,10 +111,9 @@ void init_wdt(){
 	 IE1 |= WDTIE;			// enable the WDT interrupt (in the system interrupt register IE1)
 }
 
-// Main initializes everything and leaves the CPU in low power mode.
+// ***Main initializes everything and leaves the CPU in low power mode.***
 void main(){
 
-	WDTCTL = WDTPW + WDTHOLD;       // Stop watchdog timer
 	BCSCTL1 = CALBC1_8MHZ;			// 8Mhz calibration for clock
   	DCOCTL  = CALDCO_8MHZ;
 
@@ -134,20 +121,13 @@ void main(){
 	P1DIR = 0xCF;
 	P1OUT = 0x00;
 
-	// Initialize P2 GPIO for our one button
-	P2DIR &= ~BUTTON;				// Sets the button to input
-	P2REN &= ~BUTTON;				// Resistor enable for button
-	P2OUT |= BUTTON;				// pullup on input pin
-	P2IE |= BUTTON;					// enable interrupts on button pin
-	P2IES &= ~BUTTON;				// set to interrupt on down going edge
-	P2IFG &= ~BUTTON;				// clear interrupt flag
-
   	init_adc();
   	init_wdt();
 	lcd_init();
+	//init_gpio();					// Initialization of GPIO for interrupt method - CURRENTLY DOES NOT WORK!
+	P2REN |= BUTTON;				// Initialization of GPIO for POLLING method.
 
 	ADC10CTL0 |= ENC + ADC10SC;		// Trigger one conversion for initial ambient values
-  	//ADC10CTL0 |= ADC10SC;			// Trigger one conversion
 
   	prints("Population:");
 
@@ -164,7 +144,6 @@ ISR_VECTOR(adc_handler, ".int05")
 
 
 interrupt void button_handler(){
-	test = 1;
 	switch(state){
 		case 0:{
 			state = 1;
@@ -183,15 +162,16 @@ ISR_VECTOR(button_handler, ".int03")
 
 // Watchdog Timer Interrupt Handler
 interrupt void WDT_interval_handler(){
-	if (P2IN == BUTTON){
+	// Polling state machine for button
+	if (P2IN == 0){
 		while (1){
-			if (state == 0 && P2IN == 0){
+			if (state == 0 && P2IN == BUTTON){
 				state = 1;
 				gotoXy(0,0);
 				prints("Attendance:");
 				break;
 			}
-			else if (state == 1 & P2IN == 0){
+			else if (state == 1 & P2IN == BUTTON){
 				state = 0;
 				gotoXy(0,0);
 				prints("Population:");
@@ -219,9 +199,15 @@ interrupt void WDT_interval_handler(){
 		prints("    ");
 	}
 
-
+	// Initialize readings for both sensors
 	get_right_sensor();
 	get_left_sensor();
+
+	// Sensors work by detecting a downward edge in the light readings, and then waiting for the light level
+	// to rise back to ambient.
+
+	// You must pass by both sensors to implement a count
+	// - each sensor triggers a check in the other to verify a pass.
 
 	//Left----------------------------------------------------------------------------------------------------------
 	if (ambient_left - latest_result_left > 8){	// Detect downward edge
@@ -233,7 +219,8 @@ interrupt void WDT_interval_handler(){
 	else if (lower_left == 1){
 		if (abs(ambient_left - latest_result_left) < 8){
 			if (trigger_right == 1 && timeout == 1){
-				if(state == 0){
+				if(state == 0){	// STATE - if in population mode, will decrement
+								//			  in attendance mode, will NOT decrement
 					count--;
 				}
 				trigger_right = 0;
@@ -270,8 +257,9 @@ interrupt void WDT_interval_handler(){
 		}
 	}
 
+	// Printing the current count to the LCD
 	if (count < 0){
-		/*
+		/* - Code if you wanted to display negative counts
 		gotoXy(0,1);
 		prints("-");
 		gotoXy(1,1);
